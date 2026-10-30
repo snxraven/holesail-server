@@ -2,17 +2,16 @@ const test = require('brittle')
 const b4a = require('b4a')
 const proto = require('@holesail/protocol')
 const { parse } = require('@holesail/invite')
-const {
-  createTestnet,
-  startServer,
-  udpEchoServer,
-  rawSocket,
-  readOnce,
-  frame,
-  unframe
-} = require('./helpers.js')
+const { createTestnet, startServer, udpEchoServer, rawSocket } = require('./helpers.js')
 
-test('tunnels UDP datagrams end-to-end through a real local echo server, length-framed', async (t) => {
+function onceMessage(socket) {
+  return new Promise((resolve, reject) => {
+    socket.once('message', (msg) => resolve(msg))
+    socket.once('error', reject)
+  })
+}
+
+test('tunnels UDP datagrams end-to-end through a real local echo server', async (t) => {
   const testnet = await createTestnet(t)
   const echo = await udpEchoServer(t)
 
@@ -22,16 +21,16 @@ test('tunnels UDP datagrams end-to-end through a real local echo server, length-
   const client = testnet.createNode()
   const socket = await rawSocket(t, client, server.keyPair.publicKey)
 
+  const reply = onceMessage(socket)
   socket.write(proto.encodeHeader(b4a.from(capability), proto.MODE_TUNNEL))
-  socket.write(frame(b4a.from('udp-ping')))
+  socket.trySend(b4a.from('udp-ping'))
 
-  const raw = await readOnce(socket)
-  t.is(b4a.toString(unframe(raw)), 'udp-ping')
+  t.is(b4a.toString(await reply), 'udp-ping')
 
   socket.destroy()
 })
 
-test('carries several distinct UDP datagrams over one tunnel without mixing frames', async (t) => {
+test('carries several distinct UDP datagrams over one tunnel without ordering them', async (t) => {
   const testnet = await createTestnet(t)
   const echo = await udpEchoServer(t)
 
@@ -44,22 +43,16 @@ test('carries several distinct UDP datagrams over one tunnel without mixing fram
 
   const messages = ['one', 'two', 'three']
   const received = []
-  let buffer = b4a.alloc(0)
 
-  const done = new Promise((resolve) => {
-    socket.on('data', (chunk) => {
-      buffer = b4a.concat([buffer, chunk])
-      while (buffer.length >= 4) {
-        const len = buffer.readUInt32BE(0)
-        if (buffer.length < 4 + len) break
-        received.push(b4a.toString(buffer.subarray(4, 4 + len)))
-        buffer = buffer.subarray(4 + len)
-      }
+  const done = new Promise((resolve, reject) => {
+    socket.on('message', (msg) => {
+      received.push(b4a.toString(msg))
       if (received.length === messages.length) resolve()
     })
+    socket.on('error', reject)
   })
 
-  for (const msg of messages) socket.write(frame(b4a.from(msg)))
+  for (const msg of messages) socket.trySend(b4a.from(msg))
   await done
 
   t.alike(received.sort(), messages.sort())

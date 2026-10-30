@@ -60,6 +60,9 @@ class HolesailServer extends ReadyResource {
       this.logger.debug(`Stream error: ${err && err.message}`)
     })
 
+    // Datagrams are unordered with the header, so capture them before it is parsed.
+    const udpCapture = this.udp ? libNet.bufferUdpMessages(stream) : null
+
     let buffer = b4a.alloc(0)
     const onData = (chunk) => {
       buffer = b4a.concat([buffer, chunk])
@@ -73,12 +76,14 @@ class HolesailServer extends ReadyResource {
 
       if (!b4a.equals(capability, this.capability)) {
         this.logger.warn(`Verification failed for ${encodedKey}`)
+        if (udpCapture) udpCapture.stop()
         stream.destroy()
         return
       }
 
       if (mode === MODE_PROBE) {
         this.logger.info(`Probe from ${encodedKey}`)
+        if (udpCapture) udpCapture.stop()
         this._handleProbe(stream)
         return
       }
@@ -87,12 +92,13 @@ class HolesailServer extends ReadyResource {
         this.logger.info(`Tunnel from ${encodedKey}`)
         const count = this.activeConnections.get(encodedKey) || 0
         this.activeConnections.set(encodedKey, count + 1)
-        if (this.udp) this._handleUDP(stream, leftover)
+        if (this.udp) this._handleUDP(stream, leftover, udpCapture)
         else this._handleTCP(stream, leftover)
         return
       }
 
       this.logger.warn(`Unknown mode ${mode} from ${encodedKey}`)
+      if (udpCapture) udpCapture.stop()
       stream.destroy()
     }
     stream.on('data', onData)
@@ -119,7 +125,7 @@ class HolesailServer extends ReadyResource {
     this.connection = libNet.pipeTcpServer(stream, leftover, opts)
   }
 
-  _handleUDP(stream, leftover) {
+  _handleUDP(stream, leftover, udpCapture) {
     this.logger.debug('Handling UDP connection')
     const encodedKey = z32.encode(stream.remotePublicKey)
     stream.on('close', () => {
@@ -132,7 +138,13 @@ class HolesailServer extends ReadyResource {
         this.activeConnections.set(encodedKey, count)
       }
     })
-    const opts = { port: this.port, host: this.host, logger: this.logger }
+    if (udpCapture) udpCapture.stop()
+    const opts = {
+      port: this.port,
+      host: this.host,
+      logger: this.logger,
+      pending: udpCapture ? udpCapture.pending : null
+    }
     this.connection = libNet.pipeUdpFramedServer(stream, leftover, opts)
   }
 

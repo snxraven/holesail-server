@@ -1,7 +1,6 @@
 const testnet = require('hyperdht/testnet.js')
 const net = require('net')
 const dgram = require('dgram')
-const b4a = require('b4a')
 const HolesailServer = require('../index.js')
 
 // Small local DHT swarm bootstrapped off of a single loopback node instead of
@@ -83,18 +82,6 @@ function createLogger() {
   return { logger, calls }
 }
 
-function frame(payload) {
-  const buf = b4a.from(payload)
-  const len = b4a.alloc(4)
-  len.writeUInt32BE(buf.length, 0)
-  return b4a.concat([len, buf])
-}
-
-function unframe(buf) {
-  const len = buf.readUInt32BE(0)
-  return buf.subarray(4, 4 + len)
-}
-
 module.exports = {
   createTestnet,
   startServer,
@@ -103,7 +90,5 @@ module.exports = {
   rawSocket,
   readOnce,
   waitForEvent,
-  createLogger,
-  frame,
-  unframe
+  createLogger
 }
